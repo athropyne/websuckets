@@ -62,14 +62,25 @@ class _MessageParser:
     def __init__(self, message: str | bytes):
         self.message = message
         self.serialized: InputModel = ...
-        # self.handler: Callable = ...
-        # self.model: Type[BaseModel] | None = ...
-        # self.token: str | None = ...
-        # self.event_model: EventModel = ...
         try:
             self.serialized = InputModel.model_validate_json(self.message)
         except ValidationError as e:
-            raise InvalidJSON("невалидный JSON")
+            errors = e.errors(include_url=False, include_input=False)
+            err_output: List[str] = []
+            for i in errors:
+                if i["type"] == "missing":
+                    err_output.append(f"пропущено поле '{i['loc'][0]}'")
+                elif i["type"].endswith("_type"):
+                    err_output.append(f"неверный тип поля '{i['loc'][0]}'")
+                elif i["type"] == "enum":
+                    err_output.append(f"поле '{i['loc'][0]}' может принимать только значения: {i['ctx']}")
+                elif i["type"] == "json_invalid":
+                    err_output.append("невалидный json")
+                else:
+                    err_output.append(i)
+
+            if err_output:
+                raise InternalError("ошибка валидации", err_output)
 
     @staticmethod
     def validate(model_class: Type[BaseModel], values: dict):
