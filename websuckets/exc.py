@@ -22,6 +22,10 @@ class InvalidHandlerSignature(InternalError):
         super().__init__("неверная сигнатура обработчика",
                          details)
 
+class NotAwaitableHandler(InvalidHandlerSignature):
+    def __init__(self, method_name: str):
+        super().__init__(f"функция {method_name} должна быть асинхронной")
+
 class EmptyPayload(InternalError):
     def __init__(self):
         super().__init__("отсутствует поле payload", f"для этого события поле payload обязательно")
@@ -42,8 +46,12 @@ class EventNotFound(InternalError):
         super().__init__("неизвестная команда", f"команды {event_name} не существует")
 
 
+class ValidationError(InternalError):
+    def __init__(self, details: list[str]):
+        super().__init__("ошибка валидации", details)
+
 class InvalidJSON(InternalError):
-    def __init__(self, details):
+    def __init__(self, details: str):
         super().__init__("невалидный JSON", details)
 
 
@@ -52,11 +60,6 @@ class UnexpectedArgumentError(InternalError):
         super().__init__("неизвестное поле", details)
 
 
-class UserNotFound(InternalError):
-    def __init__(self):
-        super().__init__("пользователь не найден")
 
 
-class InvalidPassword(InternalError):
-    def __init__(self):
-        super().__init__("неверный пароль")
+

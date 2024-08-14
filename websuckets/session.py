@@ -2,6 +2,7 @@ from typing import Dict
 
 from websockets import WebSocketServerProtocol
 
+from .exc import InternalError
 from .types import SOCKET_ID, USER_ID
 
 
@@ -35,9 +36,6 @@ class User:
         self._token = value
 
 
-
-
-
 class Session:
     online: Dict[SOCKET_ID, User] = {}
     verified: Dict[USER_ID, User] = {}
@@ -49,9 +47,12 @@ class Session:
     @classmethod
     def verify(cls, user: User):
         cls.verified[user.id] = user
+
     @classmethod
     def remove(cls, socket):
         user: User = cls.online[socket.id]
         if user.id is not None:
             del cls.verified[user.id]
         del cls.online[socket.id]
+
+

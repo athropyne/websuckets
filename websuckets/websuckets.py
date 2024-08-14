@@ -2,13 +2,15 @@ import asyncio
 import functools
 import inspect
 from traceback import print_tb
-from typing import List, Callable, Type, Any
+from typing import List, Callable, Type, Any, Awaitable, Coroutine
 
 import websockets
 from pydantic import ValidationError, BaseModel
 from websockets import WebSocketServerProtocol
 
-from .exc import InternalError, EventNotFound, InvalidJSON, DuplicateEventName, InvalidHandlerSignature, EmptyPayload
+from . import exc
+from .exc import InternalError, EventNotFound, DuplicateEventName, InvalidHandlerSignature, EmptyPayload, InvalidJSON, \
+    NotAwaitableHandler
 from .models import InputModel, HandlerModel
 from .security import Token
 from .session import Session, User
@@ -29,17 +31,22 @@ class CommandGroup:
 
     def command(self, name: str, protected: bool = False):
         def decorator(func: Callable):
+            if not inspect.iscoroutinefunction(func):
+                raise InvalidHandlerSignature(func.__name__)
             sig = inspect.signature(func)
             parameters = list(sig.parameters.values())
             match len(parameters):
                 case 0:
-                    raise InvalidHandlerSignature("обработчик должен принимать первым параметром объект WebSocketServerProtocol и быть аннотирован")
+                    raise InvalidHandlerSignature(
+                        "обработчик должен принимать первым параметром объект WebSocketServerProtocol и быть аннотирован")
                 case 1:
                     if parameters[0].annotation is not WebSocketServerProtocol:
-                        raise InvalidHandlerSignature("обработчик должен принимать первым параметром объект WebSocketServerProtocol и быть аннотирован")
+                        raise InvalidHandlerSignature(
+                            "обработчик должен принимать первым параметром объект WebSocketServerProtocol и быть аннотирован")
                 case 2:
                     if parameters[0].annotation is not WebSocketServerProtocol:
-                        raise InvalidHandlerSignature("обработчик должен принимать первым параметром объект WebSocketServerProtocol и быть аннотирован")
+                        raise InvalidHandlerSignature(
+                            "обработчик должен принимать первым параметром объект WebSocketServerProtocol и быть аннотирован")
                     if parameters[1].annotation is inspect.Parameter.empty:
                         raise InvalidHandlerSignature("параметр обработчика должен быть аннотирован")
                     if not issubclass(parameters[1].annotation, BaseModel):
@@ -50,10 +57,16 @@ class CommandGroup:
                         raise InvalidHandlerSignature("обработчик может принимать только модель Pydantic")
             if len(sig.parameters) > 2:
                 raise InvalidHandlerSignature("обработчик может принимать не более двух параметров")
-            for k, v in EventList.events.items():
-                if name == k[0]:
-                    raise DuplicateEventName
+            for k, v in self._commands.items():
+                if self.prefix + name == k:
+                    raise DuplicateEventName(k)
             self._commands[self.prefix + name] = HandlerModel(func=func, protected=protected)
+
+            @functools.wraps(func)
+            async def wrapper():
+                ...
+
+            return wrapper
 
         return decorator
 
@@ -65,46 +78,36 @@ class _MessageParser:
         try:
             self.serialized = InputModel.model_validate_json(self.message)
         except ValidationError as e:
-            errors = e.errors(include_url=False, include_input=False)
-            err_output: List[str] = []
-            for i in errors:
-                if i["type"] == "missing":
-                    err_output.append(f"пропущено поле '{i['loc'][0]}'")
-                elif i["type"].endswith("_type"):
-                    err_output.append(f"неверный тип поля '{i['loc'][0]}'")
-                elif i["type"] == "enum":
-                    err_output.append(f"поле '{i['loc'][0]}' может принимать только значения: {i['ctx']}")
-                elif i["type"] == "json_invalid":
-                    err_output.append("невалидный json")
-                else:
-                    err_output.append(i)
+            _MessageParser.__error_parser(e)
 
-            if err_output:
-                raise InternalError("ошибка валидации", err_output)
 
-    @staticmethod
-    def validate(model_class: Type[BaseModel], values: dict):
+    @classmethod
+    def __error_parser(cls, e: ValidationError):
+        errors = e.errors(include_url=False, include_input=False)
+        err_output: List[str] = []
+        for i in errors:
+            if i["type"] == "json_invalid":
+                raise InvalidJSON(str(e))
+            elif i["type"] == "missing":
+                err_output.append(f"пропущено поле '{i['loc'][0]}'")
+            elif i["type"].endswith("_type"):
+                err_output.append(f"неверный тип поля '{i['loc'][0]}'")
+            elif i["type"] == "enum":
+                err_output.append(f"поле '{i['loc'][0]}' может принимать только значения: {i['ctx']}")
+            else:
+                err_output.append(str(i))
+
+        if err_output:
+            raise exc.ValidationError(err_output)
+
+    @classmethod
+    def validate(cls, model_class: Type[BaseModel], values: dict):
         if values is None:
             raise EmptyPayload
         try:
             return model_class(**values)
         except ValidationError as e:
-            errors = e.errors(include_url=False, include_input=False)
-            err_output: List[str] = []
-            for i in errors:
-                if i["type"] == "missing":
-                    err_output.append(f"пропущено поле '{i['loc'][0]}'")
-                elif i["type"].endswith("_type"):
-                    err_output.append(f"неверный тип поля '{i['loc'][0]}'")
-                elif i["type"] == "enum":
-                    err_output.append(f"поле '{i['loc'][0]}' может принимать только значения: {i['ctx']}")
-                # elif i["type"] == "json_invalid":
-                #     err_output.append("невалидный json")
-                else:
-                    err_output.append(i)
-
-            if err_output:
-                raise InternalError("ошибка валидации", err_output)
+            cls.__error_parser(e)
 
     def separate(self) -> tuple[str, dict | None, str | None]:
         return self.serialized.event, self.serialized.payload, self.serialized.token
@@ -130,7 +133,7 @@ class _HandlerParser:
 
 class WebSuckets:
 
-    async def _adapter(self, func):
+    async def _adapter(self, func: Callable):
         @functools.wraps(func)
         async def wrapper(socket: WebSocketServerProtocol, model: dict | None):
             sig = inspect.signature(func)
@@ -138,7 +141,10 @@ class WebSuckets:
             if len(parameters) == 2:
                 model_class = list(sig.parameters.values())[1].annotation
                 model = _MessageParser.validate(model_class, model)
-            await func(socket, model) if model is not None else await func(socket)
+            try:
+                await func(socket, model) if model is not None else await func(socket)
+            except TypeError as e:
+                raise e
 
         return wrapper
 
@@ -166,12 +172,17 @@ class WebSuckets:
                 break
             except Exception as e:
                 print_tb(e.__traceback__)
+                print(e.__class__)
+                print(str(e))
                 await socket.send(str(e))
 
     def include_command_group(self, group: CommandGroup):
-        EventList.events = EventList.events | group.commands
+        for event_name, handler in group.commands.items():
+            if event_name in EventList.events:
+                raise DuplicateEventName(event_name)
+            EventList.events[event_name] = handler
 
     async def __call__(self, host: str, port: int):
         async with websockets.serve(self._handler, host=host, port=port):
-            print("сервер запущен")
+            print(f"сервер запущен ws://{host}:{port}")
             await asyncio.Future()
