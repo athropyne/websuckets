@@ -395,7 +395,7 @@ if __name__ == '__main__':
 
 и создадим клиент:
 
-`python -m websocket ws://localhost:9000`
+`python -m websockets ws://localhost:9000`
 
 Теперь создадим пользователя 
 
