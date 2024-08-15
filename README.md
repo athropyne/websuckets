@@ -13,14 +13,14 @@ from pydantic import BaseModelfrom websuckets import WebSucketsfrom websuckets i
 
 ### Объект WebSuckets
 
-Для создания приложения создайте объект `WebSockets`.
+Для создания приложения создайте объект `WebSuckets`.
 
 ```python
 from websuckets import WebSuckets
 app = WebSuckets()
 ```
 
-В данном примере `app` - корутина с двумя параметрами **host: str** и **port: int**.
+В данном примере `app` - вызываемый асинхронный объект с двумя параметрами **host: str** и **port: int**.
 
 Запустите ее с помощью метода `asyncio.run`:
 
